@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Forge">
+  <meta name="theme-color" content="#1c1917">
+  <title>Forge</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #1c1917;
+      --fg: #e7e5e4;
+      --muted: #a8a29e;
+      --line: #44403c;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      font: 18px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      padding: calc(24px + env(safe-area-inset-top)) 22px calc(24px + env(safe-area-inset-bottom));
+    }
+    h1 { font-size: 1.1rem; font-weight: 600; margin: 0 0 4px; }
+    .sub { color: var(--muted); font-size: 0.92rem; margin: 0 0 18px; }
+    label { display: block; color: var(--muted); font-size: 0.8rem; margin: 12px 0 6px; }
+    input, textarea, button {
+      font: inherit;
+      width: 100%;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: #292524;
+      color: var(--fg);
+    }
+    input, textarea { padding: 12px 14px; }
+    textarea { min-height: 5.5rem; resize: vertical; }
+    button {
+      padding: 16px;
+      margin-top: 14px;
+      background: var(--fg);
+      color: var(--bg);
+      border: 0;
+      font-weight: 600;
+    }
+    button.ghost {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--line);
+    }
+    button:disabled { opacity: 0.55; }
+    #talk { font-size: 1.15rem; padding: 22px; }
+    #status { color: var(--muted); min-height: 1.4em; margin: 14px 0 8px; }
+    #thread { margin-top: 8px; }
+    .turn { margin: 0 0 16px; }
+    .turn .who { color: var(--muted); font-size: 0.75rem; letter-spacing: 0.02em; }
+    .turn .said { white-space: pre-wrap; margin-top: 4px; }
+    #settings { display: none; }
+    #settings.open { display: block; }
+    #main.hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div id="main">
+    <h1>Forge</h1>
+    <p class="sub">Same sitting stays in this room. A note goes home when the key can write.</p>
+    <textarea id="ask" placeholder="Tap Talk, or type"></textarea>
+    <button id="talk" type="button">Talk</button>
+    <button class="ghost" id="open-settings" type="button">Keys</button>
+    <button class="ghost" id="new-sitting" type="button">New sitting</button>
+    <p id="status"></p>
+    <div id="thread"></div>
+  </div>
+  <div id="settings">
+    <h1>Keys</h1>
+    <p class="sub">Same two files as on the Mac. They stay on this phone — not in the page.</p>
+    <label for="gh">GitHub token</label>
+    <input id="gh" type="password" autocomplete="off" spellcheck="false">
+    <label for="xai">Grok / xAI key</label>
+    <input id="xai" type="password" autocomplete="off" spellcheck="false">
+    <button id="save" type="button">Save</button>
+    <button class="ghost" id="close-settings" type="button">Back</button>
+  </div>
+  <script>
+    const REPO = "jeffli95/forge";
+    const BRANCH = "shop-phone-ai";
+    const MODEL = "grok-4.6";
+    const GH = "https://api.github.com";
+    const XAI = "https://api.x.ai/v1/chat/completions";
+    const SLICE = [
+      "profile/forge.md",
+      "shop/phone-ai/ear.md",
+      "agents/active-work.md",
+      "agents/reminders.md",
+      "profile/me.md",
+    ];
+    const K_GH = "forge.github-phone.token";
+    const K_XAI = "forge.xai.token";
+    const K_THREAD = "forge.ear.thread";
+    const KEEP = 8;
+
+    const $ = (id) => document.getElementById(id);
+    const status = (msg) => { $("status").textContent = msg; };
+    const today = () =>
+      new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
+    const clock = () =>
+      new Intl.DateTimeFormat("en-GB", {
+        timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false,
+      }).format(new Date());
+
+    function b64decode(raw) {
+      return decodeURIComponent(escape(atob(String(raw).replace(/\s/g, ""))));
+    }
+    function b64encode(text) {
+      return btoa(unescape(encodeURIComponent(text)));
+    }
+    function tokens() {
+      return { gh: localStorage.getItem(K_GH) || "", xai: localStorage.getItem(K_XAI) || "" };
+    }
+
+    function loadThread() {
+      try {
+        const raw = JSON.parse(localStorage.getItem(K_THREAD) || "[]");
+        return Array.isArray(raw) ? raw : [];
+      } catch (err) {
+        return [];
+      }
+    }
+    function saveThread(turns) {
+      localStorage.setItem(K_THREAD, JSON.stringify(turns.slice(-KEEP)));
+    }
+    function renderThread() {
+      const box = $("thread");
+      box.replaceChildren();
+      for (const turn of loadThread()) {
+        for (const [who, said] of [["You", turn.q], ["Forge", turn.a]]) {
+          const wrap = document.createElement("div");
+          wrap.className = "turn";
+          const label = document.createElement("div");
+          label.className = "who";
+          label.textContent = who;
+          const body = document.createElement("div");
+          body.className = "said";
+          body.textContent = said;
+          wrap.append(label, body);
+          box.append(wrap);
+        }
+      }
+    }
+
+    async function ghFetch(path, opts = {}) {
+      const { gh } = tokens();
+      return fetch(`${GH}${path}`, {
+        ...opts,
+        headers: {
+          Authorization: `Bearer ${gh}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          "Content-Type": "application/json",
+          ...(opts.headers || {}),
+        },
+      });
+    }
+
+    async function fileText(path) {
+      const res = await ghFetch(`/repos/${REPO}/contents/${path}?ref=${BRANCH}`);
+      if (res.status === 404) return "";
+      if (!res.ok) throw new Error(`GitHub ${res.status} reading ${path}`);
+      const data = await res.json();
+      return `## ${path}\n${b64decode(data.content).trim()}\n`;
+    }
+
+    async function newestSession() {
+      const res = await ghFetch(`/repos/${REPO}/contents/sessions?ref=${BRANCH}`);
+      if (!res.ok) return "";
+      const listing = await res.json();
+      const names = listing.map((x) => x.name).filter((n) => n.endsWith(".md"));
+      if (!names.length) return "";
+      names.sort();
+      return fileText(`sessions/${names[names.length - 1]}`);
+    }
+
+    async function memory() {
+      const parts = [];
+      for (const path of SLICE) parts.push(await fileText(path));
+      parts.push(await fileText(`sessions/${today()}-phone.md`));
+      parts.push(await newestSession());
+      return parts.filter(Boolean).join("\n");
+    }
+
+    async function grok(question, mem, history) {
+      const { xai } = tokens();
+      const messages = [
+        {
+          role: "system",
+          content:
+            "You are Forge. The human is Keeper. Use the files below as memory. " +
+            "This sitting may already have turns — stay in that conversation. " +
+            "Short, warm, in the room. Do not invent biography. " +
+            "If something should last, say so.\n\n" + mem,
+        },
+      ];
+      for (const turn of history.slice(-KEEP)) {
+        messages.push({ role: "user", content: turn.q });
+        messages.push({ role: "assistant", content: turn.a });
+      }
+      messages.push({ role: "user", content: question });
+      const res = await fetch(XAI, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${xai}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ model: MODEL, max_tokens: 400, messages }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        const msg = (data && data.error && data.error.message) || `xAI ${res.status}`;
+        throw new Error(msg);
+      }
+      return data.choices[0].message.content.trim();
+    }
+
+    async function writeHome(question, answer) {
+      const path = `sessions/${today()}-phone.md`;
+      const api = `/repos/${REPO}/contents/${path}`;
+      const got = await ghFetch(`${api}?ref=${BRANCH}`);
+      let sha = null;
+      let prior = "";
+      if (got.ok) {
+        const data = await got.json();
+        sha = data.sha;
+        prior = b64decode(data.content);
+      } else if (got.status !== 404) {
+        const err = new Error(`GitHub ${got.status} writing note`);
+        err.status = got.status;
+        throw err;
+      }
+      const crumb = `## ${clock()}\n- Q: ${question.trim()}\n- A: ${answer.trim()}\n`;
+      const body = prior.trim()
+        ? `${prior.trim()}\n\n${crumb}\n`
+        : `# ${today()} — phone\n\n${crumb}\n`;
+      const payload = {
+        message: `Phone ear: note from ${clock()}.`,
+        content: b64encode(body),
+        branch: BRANCH,
+      };
+      if (sha) payload.sha = sha;
+      const put = await ghFetch(api, { method: "PUT", body: JSON.stringify(payload) });
+      if (!put.ok) {
+        const err = new Error(`GitHub ${put.status} writing note`);
+        err.status = put.status;
+        throw err;
+      }
+    }
+
+    function speak(text) {
+      try {
+        speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance(text);
+        u.rate = 1.02;
+        speechSynthesis.speak(u);
+      } catch (err) { /* text stays on screen */ }
+    }
+
+    function listen() {
+      const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!Rec) return Promise.resolve(null);
+      return new Promise((resolve) => {
+        let done = false;
+        const finish = (value) => {
+          if (done) return;
+          done = true;
+          resolve(value);
+        };
+        const rec = new Rec();
+        rec.lang = "en-US";
+        rec.interimResults = false;
+        rec.onresult = (e) => finish(e.results[0][0].transcript);
+        rec.onerror = () => finish(null);
+        rec.onend = () => finish(null);
+        try { rec.start(); } catch (err) { finish(null); }
+      });
+    }
+
+    async function run() {
+      const t = tokens();
+      if (!t.gh || !t.xai) {
+        $("settings").classList.add("open");
+        $("main").classList.add("hidden");
+        status("Need the two keys once.");
+        return;
+      }
+      let question = $("ask").value.trim();
+      $("talk").disabled = true;
+      try {
+        speechSynthesis.speak(new SpeechSynthesisUtterance(" "));
+        if (!question) {
+          status("Listening…");
+          question = (await listen() || "").trim();
+          if (question) $("ask").value = question;
+        }
+        if (!question) {
+          status("Say something, or type it.");
+          $("ask").focus();
+          return;
+        }
+        status("Thinking…");
+        const history = loadThread();
+        const mem = await memory();
+        const answer = await grok(question, mem, history);
+        const turns = history.concat([{ q: question, a: answer }]);
+        saveThread(turns);
+        renderThread();
+        $("ask").value = "";
+        speak(answer);
+        try {
+          await writeHome(question, answer);
+          status("Wrote that home.");
+        } catch (err) {
+          if (err.status === 403) {
+            status("This sitting is on the phone. The GitHub key still can’t write — Contents needs Read and write.");
+          } else {
+            status("This sitting is on the phone. The note home didn’t land.");
+          }
+        }
+      } catch (err) {
+        status(err.message || String(err));
+      } finally {
+        $("talk").disabled = false;
+      }
+    }
+
+    $("talk").addEventListener("click", run);
+    $("new-sitting").addEventListener("click", () => {
+      saveThread([]);
+      renderThread();
+      $("ask").value = "";
+      status("Fresh sitting.");
+    });
+    $("open-settings").addEventListener("click", () => {
+      $("gh").value = tokens().gh;
+      $("xai").value = tokens().xai;
+      $("settings").classList.add("open");
+      $("main").classList.add("hidden");
+    });
+    $("close-settings").addEventListener("click", () => {
+      $("settings").classList.remove("open");
+      $("main").classList.remove("hidden");
+    });
+    $("save").addEventListener("click", () => {
+      localStorage.setItem(K_GH, $("gh").value.trim());
+      localStorage.setItem(K_XAI, $("xai").value.trim());
+      $("gh").value = tokens().gh;
+      $("xai").value = tokens().xai;
+      $("settings").classList.remove("open");
+      $("main").classList.remove("hidden");
+      status("Keys are on this phone.");
+    });
+
+    renderThread();
+    if (!tokens().gh || !tokens().xai) {
+      $("settings").classList.add("open");
+      $("main").classList.add("hidden");
+    }
+
+    const params = new URLSearchParams(location.search);
+    const preset = params.get("q");
+    if (preset) {
+      $("ask").value = preset;
+      run();
+    }
+  </script>
+</body>
+</html>
